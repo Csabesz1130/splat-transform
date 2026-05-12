@@ -1,0 +1,27 @@
+# ActionNet sidecar image for splat-transform.
+#
+# Built by actionnet-ai's docker-compose under the `splat-transform` service
+# name. The sidecar exposes the HTTP+SSE protocol defined in src/actionnet/
+# server.ts and listens on port 7400 by default.
+#
+# We use the same Node version as upstream's package.json engines field and
+# skip the WebGPU polyfill in this image — the actionnet-ai pipeline only
+# needs CPU-side operations from the sidecar (SOG compression, voxelization)
+# because the GPU-intensive 3DGS training already runs on Modal.
+
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev --include=optional
+COPY . .
+RUN npm run build || true  # the upstream build script is the source of truth
+
+FROM node:20-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production
+ENV ACTIONNET_SIDECAR_PORT=7400
+COPY --from=build /app /app
+EXPOSE 7400
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD node -e "require('http').get('http://127.0.0.1:'+process.env.ACTIONNET_SIDECAR_PORT+'/healthz', r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+CMD ["node", "bin/cli.actionnet.mjs", "serve"]
